@@ -7,7 +7,7 @@
 # what keeps the Trivy scan (Stage 9) quiet.
 
 # ---------- build stage ----------
-FROM alpine:3.21 AS build
+FROM alpine:3.22 AS build
 
 WORKDIR /bundle
 
@@ -21,14 +21,19 @@ RUN set -eux; \
     grep -q "Learn DevOps the Easy Way" ./site/index.html
 
 # ---------- runtime stage ----------
-FROM nginx:1.27-alpine
+FROM nginx:1.29-alpine
 
 LABEL org.opencontainers.image.title="devsecops-masterclass" \
       org.opencontainers.image.description="Static DevOps landing page served by nginx" \
       org.opencontainers.image.licenses="MIT"
 
-# Drop the packaged default vhost, install ours.
-RUN rm -f /etc/nginx/conf.d/default.conf
+# Patch OS packages at build time. A pinned base tag is rebuilt less often than
+# its Alpine packages are fixed, so without this the image inherits CVEs that
+# already HAVE fixes upstream — exactly what Stage 9 gates on (--ignore-unfixed
+# does not, and should not, hide a vulnerability that is fixable).
+RUN set -eux; \
+    apk upgrade --no-cache; \
+    rm -f /etc/nginx/conf.d/default.conf
 
 COPY nginx/nginx.conf      /etc/nginx/nginx.conf
 COPY nginx/default.conf    /etc/nginx/conf.d/site.conf
