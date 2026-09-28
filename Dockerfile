@@ -39,10 +39,14 @@ COPY nginx/nginx.conf      /etc/nginx/nginx.conf
 COPY nginx/default.conf    /etc/nginx/conf.d/site.conf
 COPY --from=build /bundle/site/ /usr/share/nginx/html/
 
-# Everything nginx must write to is owned by the unprivileged nginx user.
+# Writable paths for the unprivileged nginx user. Note that nginx.conf streams
+# both access and error logs to stdout/stderr, so this image does NOT depend on
+# /var/log/nginx being writable — important because that path is a fresh
+# root-owned tmpfs when the container runs --read-only, which would otherwise
+# kill nginx at startup with "[emerg] ... error.log ... (13: Permission denied)".
 RUN set -eux; \
     mkdir -p /tmp/client_temp /tmp/proxy_temp /tmp/fastcgi_temp /tmp/uwsgi_temp /tmp/scgi_temp; \
-    chown -R nginx:nginx /usr/share/nginx/html /var/cache/nginx /var/log/nginx /tmp/client_temp \
+    chown -R nginx:nginx /usr/share/nginx/html /var/cache/nginx /tmp/client_temp \
         /tmp/proxy_temp /tmp/fastcgi_temp /tmp/uwsgi_temp /tmp/scgi_temp; \
     nginx -t -c /etc/nginx/nginx.conf
 

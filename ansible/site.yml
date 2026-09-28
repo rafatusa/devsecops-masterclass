@@ -21,6 +21,11 @@
     container_port: 8080
     app_dir: /opt/devsecops
     remote_tarball: /opt/devsecops/image.tar
+    # The nginx user inside the official Alpine image is uid/gid 101. A tmpfs
+    # mounts fresh and root-owned, discarding any build-time chown, so the
+    # mounts must carry ownership explicitly or nginx cannot write to them.
+    nginx_uid: 101
+    nginx_gid: 101
     # image_tarball MUST be an absolute path: ansible.builtin.copy resolves a
     # relative src against the playbook's directory, not the working directory.
     # The configure stage passes -e image_tarball=$GITHUB_WORKSPACE/image.tar.
@@ -149,6 +154,8 @@
       when: container_probe.rc == 0
       changed_when: true
 
+    # tmpfs mounts carry uid/gid/mode because a tmpfs is created fresh and
+    # root-owned, which silently discards the image's build-time chown.
     - name: Run the site container bound to localhost
       ansible.builtin.command:
         cmd: >-
@@ -157,12 +164,43 @@
           --restart unless-stopped
           --publish 127.0.0.1:{{ container_port }}:8080
           --read-only
-          --tmpfs /tmp
-          --tmpfs /var/cache/nginx
-          --tmpfs /var/log/nginx
+          --tmpfs /tmp:uid={{ nginx_uid }},gid={{ nginx_gid }},mode=1777
+          --tmpfs /var/cache/nginx:uid={{ nginx_uid }},gid={{ nginx_gid }},mode=0755
           {{ image_name }}:{{ image_tag }}
       register: docker_run
       changed_when: docker_run.rc == 0
+
+    # `docker run --detach` exits 0 as soon as the container is CREATED, and
+    # --restart unless-stopped turns a crashing entrypoint into a restart loop
+    # rather than a non-zero exit. Assert the container is actually Running, so
+    # a crash loop fails HERE with its own logs instead of 120s later in a
+    # port-wait timeout that says nothing about the cause.
+    - name: Give the container a moment to start
+      ansible.builtin.pause:
+        seconds: 5
+
+    - name: Read the container state
+      ansible.builtin.command:
+        cmd: "docker inspect --format={{ '{{.State.Status}}' }} {{ container_name }}"
+      register: container_state
+      changed_when: false
+
+    - name: Capture container logs when it is not running
+      ansible.builtin.command:
+        cmd: "docker logs --tail 40 {{ container_name }}"
+      register: container_crash_logs
+      when: container_state.stdout | trim != 'running'
+      failed_when: false
+      changed_when: false
+
+    - name: Fail with the container's own error output when it is not running
+      ansible.builtin.fail:
+        msg: |
+          Container {{ container_name }} is '{{ container_state.stdout | trim }}', not running.
+          Container logs:
+          {{ container_crash_logs.stdout | default('') }}
+          {{ container_crash_logs.stderr | default('') }}
+      when: container_state.stdout | trim != 'running'
 
     - name: Wait for the container to answer on its port
       ansible.builtin.wait_for:
