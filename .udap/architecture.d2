@@ -1,0 +1,31 @@
+# udap:meta cloud=aws region=us-east-1 target=ec2-docker
+
+direction: down
+visitor: Masterclass Audience { shape: person; udap-type: generic.user }
+github: GitHub Actions CI/CD { icon: simple:githubactions; udap-type: generic.app }
+ghcr: GHCR Container Registry { icon: simple:docker; udap-type: generic.app }
+tfstate: Terraform State (S3) { udap-type: aws.s3 }
+iam: EC2 IAM Role { udap-type: aws.iam }
+eip: Elastic IP { udap-type: aws.eip }
+vpc: VPC 10.20.0.0/16 {
+  udap-type: aws.vpc
+  igw: Internet Gateway { udap-type: aws.internetgateway }
+  rt: Public Route Table { udap-type: aws.routetable }
+  subnet: Public Subnet 10.20.1.0/24 { udap-type: aws.subnet }
+  sg: Security Group 22/80 { udap-type: aws.securitygroup }
+  web: EC2 Ubuntu 22.04 Docker Host { udap-type: aws.ec2 }
+  nginx: Nginx Static Site Container :80 { icon: simple:nginx; udap-type: generic.app }
+}
+
+visitor -> eip: HTTP 80
+eip -> vpc.web: associated public IP
+vpc.igw -> vpc.rt: default route 0.0.0.0/0
+vpc.rt -> vpc.subnet: association
+vpc.subnet -> vpc.web: hosts instance
+vpc.sg -> vpc.web: allows 22 and 80
+vpc.web -> vpc.nginx: docker run static site
+iam -> vpc.web: instance profile
+github -> tfstate: terraform state
+github -> vpc.web: terraform apply and ansible over SSH
+github -> ghcr: docker build and push
+vpc.web -> ghcr: docker pull image

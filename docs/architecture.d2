@@ -1,0 +1,131 @@
+# DevSecOps Masterclass — deployment architecture (full D2)
+# Render:  d2 docs/architecture.d2 docs/architecture.svg
+#
+# The platform's source of truth is .udap/architecture.d2 (UDAP profile).
+# This file is the richer, presentation-ready version for slides and the README.
+
+direction: down
+
+vars: {
+  d2-config: {
+    layout-engine: elk
+    theme-id: 200
+  }
+}
+
+classes: {
+  managed: {
+    style: {
+      fill: "#0d1426"
+      stroke: "#38bdf8"
+      font-color: "#eef2ff"
+      border-radius: 8
+    }
+  }
+  external: {
+    style: {
+      fill: "#141b2e"
+      stroke: "#a78bfa"
+      font-color: "#eef2ff"
+      border-radius: 8
+      stroke-dash: 3
+    }
+  }
+  boundary: {
+    style: {
+      fill: "#070b16"
+      stroke: "#334155"
+      font-color: "#9aa8c7"
+    }
+  }
+}
+
+audience: Masterclass Audience {
+  shape: person
+  class: external
+}
+
+dev: Engineer {
+  shape: person
+  class: external
+}
+
+github: GitHub Repository {
+  class: external
+  icon: https://icons.terrastruct.com/dev%2Fgithub.svg
+}
+
+actions: GitHub Actions\n20-stage pipeline {
+  class: external
+  icon: https://icons.terrastruct.com/dev%2Fgithub-actions.svg
+}
+
+state: S3\nTerraform State {
+  class: managed
+  icon: https://icons.terrastruct.com/aws%2FStorage%2FAmazon-Simple-Storage-Service-S3.svg
+}
+
+aws: AWS Account — us-east-1 {
+  class: boundary
+
+  iam: IAM Role\n+ Instance Profile {
+    class: managed
+    icon: https://icons.terrastruct.com/aws%2FSecurity%2C%20Identity%2C%20%26%20Compliance%2FAWS-Identity-and-Access-Management_IAM.svg
+  }
+
+  eip: Elastic IP {
+    class: managed
+    icon: https://icons.terrastruct.com/aws%2FNetworking%20%26%20Content%20Delivery%2FElastic-IP-Address.svg
+  }
+
+  vpc: VPC 10.20.0.0/16 {
+    class: boundary
+
+    igw: Internet Gateway {
+      class: managed
+      icon: https://icons.terrastruct.com/aws%2FNetworking%20%26%20Content%20Delivery%2FAmazon-VPC_Internet-Gateway.svg
+    }
+
+    rt: Public Route Table\n0.0.0.0/0 -> IGW {
+      class: managed
+      icon: https://icons.terrastruct.com/aws%2FNetworking%20%26%20Content%20Delivery%2FAmazon-VPC_Router.svg
+    }
+
+    subnet: Public Subnet 10.20.1.0/24 {
+      class: boundary
+
+      sg: Security Group\ningress 22, 80 {
+        class: managed
+        icon: https://icons.terrastruct.com/aws%2F_Group%20Icons%2FAWS-Cloud-security_light-bg.svg
+      }
+
+      ec2: EC2 t3.micro\nUbuntu 22.04 {
+        class: managed
+        icon: https://icons.terrastruct.com/aws%2FCompute%2FAmazon-EC2.svg
+
+        nginx: Host Nginx :80\nreverse proxy {
+          class: managed
+          icon: https://icons.terrastruct.com/dev%2Fnginx.svg
+        }
+
+        container: Docker container\nnginx:1.27-alpine :8080 {
+          class: managed
+          icon: https://icons.terrastruct.com/dev%2Fdocker.svg
+        }
+      }
+    }
+  }
+}
+
+dev -> github: git push
+github -> actions: workflow_dispatch
+actions -> state: read/write state
+actions -> aws.vpc.subnet.ec2: terraform apply + ansible over SSH (22)
+actions -> aws.vpc.subnet.ec2.container: docker load image artifact
+aws.iam -> aws.vpc.subnet.ec2: instance profile (SSM)
+audience -> aws.eip: HTTP 80
+aws.eip -> aws.vpc.subnet.ec2: static public address
+aws.vpc.igw -> aws.vpc.rt: default route
+aws.vpc.rt -> aws.vpc.subnet: association
+aws.vpc.subnet.sg -> aws.vpc.subnet.ec2: filters inbound
+aws.vpc.subnet.ec2.nginx -> aws.vpc.subnet.ec2.container: proxy_pass 127.0.0.1:8080

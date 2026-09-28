@@ -1,0 +1,32 @@
+# dependencies
+node_modules/
+
+# test + coverage output
+coverage/
+*.lcov
+
+# build artifacts
+image.tar
+*.tgz
+
+# terraform
+infra/.terraform/
+infra/.terraform.lock.hcl
+*.tfstate
+*.tfstate.*
+tfplan
+crash.log
+
+# ansible generated inventory
+ansible/inventory.ini
+
+# local environment
+.env
+.env.*
+!.env.example
+
+# editors / OS
+.DS_Store
+.idea/
+.vscode/
+*.swp

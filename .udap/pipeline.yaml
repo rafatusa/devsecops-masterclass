@@ -1,0 +1,277 @@
+version: 1
+name: devsecops-masterclass
+vcs: github
+rollback:
+  strategy: rerun
+
+stages:
+  - id: validate-assets
+    kind: lint
+    timeout_minutes: 10
+    steps:
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Install dependencies
+        run: npm ci
+      - name: Stage 2a - Validate HTML (htmlhint)
+        run: npm run validate:html
+      - name: Stage 2b - Validate CSS (stylelint)
+        run: npm run validate:css
+      - name: Stage 2c - Validate JavaScript (node syntax check)
+        run: npm run validate:js
+
+  - id: lint
+    kind: lint
+    needs: [validate-assets]
+    timeout_minutes: 10
+    steps:
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Install dependencies
+        run: npm ci
+      - name: Stage 3 - ESLint
+        run: npm run lint
+
+  - id: unit-tests
+    kind: test
+    needs: [lint]
+    timeout_minutes: 15
+    steps:
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Install dependencies
+        run: npm ci
+      - name: Stage 4 - Jest unit tests
+        run: npm test
+      - name: Stage 5 - Code coverage report
+        id: coverage
+        run: npm run coverage:report
+      - name: Upload coverage artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: coverage/
+    outputs:
+      coverage_pct: "${{ steps.coverage.outputs.coverage_pct }}"
+
+  - id: secret-scan
+    kind: security
+    needs: [unit-tests]
+    timeout_minutes: 10
+    steps:
+      - name: Install Gitleaks
+        run: |
+          GITLEAKS_VERSION=8.28.0
+          mkdir -p "${HOME}/.local/bin"
+          curl -sSfL "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" -o /tmp/gitleaks.tar.gz
+          tar -xzf /tmp/gitleaks.tar.gz -C /tmp gitleaks
+          install -m 0755 /tmp/gitleaks "${HOME}/.local/bin/gitleaks"
+          "${HOME}/.local/bin/gitleaks" version
+      - name: Stage 6 - Gitleaks secret scanning
+        run: |
+          "${HOME}/.local/bin/gitleaks" detect --source . --config .gitleaks.toml \
+            --redact --verbose --exit-code 1
+
+  - id: static-security
+    kind: security
+    needs: [secret-scan]
+    timeout_minutes: 15
+    steps:
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install Semgrep
+        run: |
+          python -m pip install --upgrade semgrep
+          semgrep --version
+      - name: Stage 7 - Semgrep static security scan
+        run: semgrep scan --config p/ci --config p/security-audit --error --metrics=off .
+
+  - id: docker-build
+    kind: build
+    needs: [static-security]
+    timeout_minutes: 20
+    steps:
+      - name: Stage 8 - Docker build
+        run: docker build -t "devsecops-masterclass:${GITHUB_SHA}" -t devsecops-masterclass:ci .
+      - name: Install Trivy
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y wget gnupg
+          wget -qO - https://aquasecurity.github.io/trivy-repo/deb/public.key \
+            | gpg --dearmor | sudo tee /usr/share/keyrings/trivy.gpg > /dev/null
+          echo "deb [signed-by=/usr/share/keyrings/trivy.gpg] https://aquasecurity.github.io/trivy-repo/deb generic main" \
+            | sudo tee /etc/apt/sources.list.d/trivy.list
+          sudo apt-get update
+          sudo apt-get install -y trivy
+          trivy --version
+      - name: Stage 9 - Container vulnerability scan (Trivy)
+        run: |
+          trivy image --severity HIGH,CRITICAL --ignore-unfixed \
+            --exit-code 1 --no-progress devsecops-masterclass:ci
+      - name: Export image tarball
+        run: docker save devsecops-masterclass:ci -o image.tar
+      - name: Upload image artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: docker-image
+          path: image.tar
+          retention-days: 1
+
+  - id: terraform-checks
+    kind: custom
+    needs: [docker-build]
+    timeout_minutes: 15
+    env:
+      AWS_ACCESS_KEY_ID: "${{ secrets.AWS_ACCESS_KEY_ID }}"
+      AWS_SECRET_ACCESS_KEY: "${{ secrets.AWS_SECRET_ACCESS_KEY }}"
+      AWS_REGION: us-east-1
+      AWS_DEFAULT_REGION: us-east-1
+      TF_VAR_project_name: "${{ secrets.PROJECT_NAME }}"
+      TF_VAR_ssh_public_key: "${{ secrets.SSH_PUBLIC_KEY }}"
+    steps:
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.9.8
+      - name: Terraform init
+        working-directory: infra
+        run: |
+          terraform init -input=false -reconfigure \
+            -backend-config="bucket=${{ secrets.TF_STATE_BUCKET }}" \
+            -backend-config="key=${{ secrets.PROJECT_NAME }}/terraform.tfstate" \
+            -backend-config="region=us-east-1"
+      - name: Stage 10 - Terraform validate
+        working-directory: infra
+        run: terraform validate -no-color
+      - name: Stage 11 - Terraform format check
+        working-directory: infra
+        run: terraform fmt -check -recursive -diff
+      - name: Stage 12 - Terraform plan
+        working-directory: infra
+        run: terraform plan -input=false -no-color -out=tfplan
+
+  - id: provision
+    kind: provision
+    needs: [terraform-checks]
+    timeout_minutes: 30
+    env:
+      AWS_ACCESS_KEY_ID: "${{ secrets.AWS_ACCESS_KEY_ID }}"
+      AWS_SECRET_ACCESS_KEY: "${{ secrets.AWS_SECRET_ACCESS_KEY }}"
+      AWS_REGION: us-east-1
+      AWS_DEFAULT_REGION: us-east-1
+      TF_VAR_project_name: "${{ secrets.PROJECT_NAME }}"
+      TF_VAR_ssh_public_key: "${{ secrets.SSH_PUBLIC_KEY }}"
+    steps:
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.9.8
+      - name: Terraform init
+        working-directory: infra
+        run: |
+          terraform init -input=false -reconfigure \
+            -backend-config="bucket=${{ secrets.TF_STATE_BUCKET }}" \
+            -backend-config="key=${{ secrets.PROJECT_NAME }}/terraform.tfstate" \
+            -backend-config="region=us-east-1"
+      - name: Stage 13 - Terraform apply
+        working-directory: infra
+        run: terraform apply -input=false -auto-approve -no-color
+      - name: Export instance IP
+        id: tfout
+        working-directory: infra
+        run: |
+          IP="$(terraform output -raw public_ip)"
+          echo "public_ip=${IP}" >> "$GITHUB_OUTPUT"
+    outputs:
+      public_ip: "${{ steps.tfout.outputs.public_ip }}"
+
+  - id: configure
+    kind: configure
+    needs: [provision]
+    timeout_minutes: 30
+    env:
+      AWS_ACCESS_KEY_ID: "${{ secrets.AWS_ACCESS_KEY_ID }}"
+      AWS_SECRET_ACCESS_KEY: "${{ secrets.AWS_SECRET_ACCESS_KEY }}"
+      AWS_REGION: us-east-1
+      AWS_DEFAULT_REGION: us-east-1
+      APP_HOST: "${{ needs.provision.outputs.public_ip }}"
+      SSH_USER: "${{ secrets.SSH_USER }}"
+      IMAGE_NAME: devsecops-masterclass
+    steps:
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install Ansible
+        run: |
+          python -m pip install --upgrade ansible-core
+          ansible --version
+      - name: Download image artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: docker-image
+      - name: Stage 14 - SSH into EC2 (write key, trust host, wait for sshd)
+        env:
+          SSH_KEY: "${{ secrets.SSH_PRIVATE_KEY }}"
+        run: |
+          mkdir -p ~/.ssh
+          printf '%s\n' "$SSH_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          for i in $(seq 1 20); do
+            if ssh-keyscan -T 10 -H "$APP_HOST" >> ~/.ssh/known_hosts 2>/dev/null && [ -s ~/.ssh/known_hosts ]; then
+              break
+            fi
+            echo "waiting for sshd on $APP_HOST ($i/20)"
+            sleep 15
+          done
+          ssh -i ~/.ssh/deploy_key -o BatchMode=yes "${SSH_USER}@${APP_HOST}" 'echo SSH OK; uname -a'
+      - name: Generate inventory
+        run: |
+          mkdir -p ansible
+          printf '[web]\n%s ansible_user=%s ansible_ssh_private_key_file=%s\n' \
+            "$APP_HOST" "$SSH_USER" "$HOME/.ssh/deploy_key" > ansible/inventory.ini
+          cat ansible/inventory.ini
+      - name: Stages 15-17 - Install Docker, deploy container, configure Nginx
+        env:
+          ANSIBLE_HOST_KEY_CHECKING: "False"
+        run: |
+          ansible-playbook -i ansible/inventory.ini ansible/site.yml \
+            -e "image_tarball=${GITHUB_WORKSPACE}/image.tar" \
+            -e "image_name=${IMAGE_NAME}" \
+            -e "image_tag=ci"
+
+  - id: verify
+    kind: verify
+    needs: [unit-tests, provision, configure]
+    timeout_minutes: 20
+    env:
+      AWS_ACCESS_KEY_ID: "${{ secrets.AWS_ACCESS_KEY_ID }}"
+      AWS_SECRET_ACCESS_KEY: "${{ secrets.AWS_SECRET_ACCESS_KEY }}"
+      AWS_REGION: us-east-1
+      AWS_DEFAULT_REGION: us-east-1
+      APP_HOST: "${{ needs.provision.outputs.public_ip }}"
+      COVERAGE_PCT: "${{ needs.unit-tests.outputs.coverage_pct }}"
+      IMAGE_NAME: devsecops-masterclass
+      GITHUB_TOKEN: "${{ secrets.GITHUB_TOKEN }}"
+    steps:
+      - name: Stage 18 - Smoke test (landing page content)
+        run: |
+          curl --fail --silent --show-error --retry 12 --retry-delay 10 --retry-all-errors \
+            "http://${APP_HOST}/" -o /tmp/index.html
+          grep -q "Learn DevOps the Easy Way" /tmp/index.html
+          echo "smoke test passed: landing page served"
+      - name: Stage 19 - Health check endpoint
+        run: |
+          curl --fail --silent --show-error --retry 10 --retry-delay 10 --retry-all-errors \
+            "http://${APP_HOST}/healthz" -o /tmp/health.txt
+          cat /tmp/health.txt
+      - name: Stage 20 - Deployment summary
+        run: bash scripts/deployment_summary.sh

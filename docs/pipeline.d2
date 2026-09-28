@@ -1,0 +1,135 @@
+# DevSecOps Masterclass — CI/CD pipeline diagram (full D2)
+# Render:  d2 docs/pipeline.d2 docs/pipeline.svg
+#
+# Twenty stages, grouped by the job that runs them in .github/workflows/deploy.yml.
+
+direction: right
+
+vars: {
+  d2-config: {
+    layout-engine: elk
+    theme-id: 200
+  }
+}
+
+classes: {
+  gate: {
+    style: {
+      fill: "#0d1426"
+      stroke: "#38bdf8"
+      font-color: "#eef2ff"
+      border-radius: 8
+    }
+  }
+  sec: {
+    style: {
+      fill: "#1a1430"
+      stroke: "#f472b6"
+      font-color: "#eef2ff"
+      border-radius: 8
+    }
+  }
+  infra: {
+    style: {
+      fill: "#0b1a1a"
+      stroke: "#34d399"
+      font-color: "#eef2ff"
+      border-radius: 8
+    }
+  }
+  job: {
+    style: {
+      fill: "#070b16"
+      stroke: "#334155"
+      font-color: "#9aa8c7"
+    }
+  }
+}
+
+source: "Job: checkout (auto)" {
+  class: job
+  s1: "1. Checkout Source" { class: gate }
+}
+
+validate: "Job: validate-assets" {
+  class: job
+  s2a: "2. Validate HTML\nhtmlhint" { class: gate }
+  s2b: "2. Validate CSS\nstylelint" { class: gate }
+  s2c: "2. Validate JavaScript\nnode --check" { class: gate }
+}
+
+quality: "Job: lint + unit-tests" {
+  class: job
+  s3: "3. Lint\nESLint" { class: gate }
+  s4: "4. Unit Tests\nJest" { class: gate }
+  s5: "5. Code Coverage\nJest coverage" { class: gate }
+}
+
+security: "Jobs: secret-scan + static-security" {
+  class: job
+  s6: "6. Secret Scanning\nGitleaks" { class: sec }
+  s7: "7. Static Security Scan\nSemgrep" { class: sec }
+}
+
+build: "Job: docker-build" {
+  class: job
+  s8: "8. Docker Build" { class: gate }
+  s9: "9. Container Vuln Scan\nTrivy HIGH/CRITICAL" { class: sec }
+}
+
+iac: "Job: terraform-checks" {
+  class: job
+  s10: "10. Terraform Validate" { class: infra }
+  s11: "11. Terraform Format Check" { class: infra }
+  s12: "12. Terraform Plan" { class: infra }
+}
+
+provision: "Job: provision" {
+  class: job
+  s13: "13. Terraform Apply\nVPC, EC2, EIP, IAM" { class: infra }
+}
+
+deploy: "Job: configure (Ansible)" {
+  class: job
+  s14: "14. SSH into EC2" { class: infra }
+  s15: "15. Install Docker" { class: infra }
+  s16: "16. Deploy Container" { class: infra }
+  s17: "17. Configure Nginx" { class: infra }
+}
+
+verify: "Job: verify" {
+  class: job
+  s18: "18. Smoke Test" { class: gate }
+  s19: "19. Health Check" { class: gate }
+  s20: "20. Deployment Summary" { class: gate }
+}
+
+source.s1 -> validate.s2a
+validate.s2a -> validate.s2b
+validate.s2b -> validate.s2c
+validate.s2c -> quality.s3
+quality.s3 -> quality.s4
+quality.s4 -> quality.s5
+quality.s5 -> security.s6
+security.s6 -> security.s7
+security.s7 -> build.s8
+build.s8 -> build.s9
+build.s9 -> iac.s10
+iac.s10 -> iac.s11
+iac.s11 -> iac.s12
+iac.s12 -> provision.s13
+provision.s13 -> deploy.s14: public_ip output
+deploy.s14 -> deploy.s15
+deploy.s15 -> deploy.s16
+deploy.s16 -> deploy.s17
+deploy.s17 -> verify.s18
+verify.s18 -> verify.s19
+verify.s19 -> verify.s20
+quality.s5 -> verify.s20: coverage_pct {
+  style.stroke-dash: 3
+  style.stroke: "#a78bfa"
+}
+build.s8 -> deploy.s16: image.tar artifact {
+  style.stroke-dash: 3
+  style.stroke: "#a78bfa"
+}

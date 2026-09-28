@@ -1,0 +1,18 @@
+# Gitleaks configuration — Stage 6: Secret Scanning
+#
+# Extends the upstream default ruleset (all built-in secret detectors stay
+# active) and narrows only the paths that cannot contain real credentials.
+
+title = "devsecops-masterclass"
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Generated artifacts and lockfiles contain no real secrets"
+paths = [
+  '''^coverage/''',
+  '''^node_modules/''',
+  '''^package-lock\.json$''',
+  '''^docs/.*\.svg$''',
+]

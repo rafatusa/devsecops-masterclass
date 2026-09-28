@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="description" content="Learn DevOps the Easy Way — Infrastructure as Code, Containers, CI/CD and Automation, demonstrated by a complete DevSecOps pipeline." />
+    <title>Learn DevOps the Easy Way</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="stylesheet" href="css/styles.css" />
+  </head>
+  <body>
+    <div class="backdrop" aria-hidden="true">
+      <span class="orb orb-a"></span>
+      <span class="orb orb-b"></span>
+      <span class="grid-lines"></span>
+    </div>
+
+    <header class="topbar">
+      <a class="brand" href="#top">
+        <span class="brand-mark" aria-hidden="true">&lt;/&gt;</span>
+        <span class="brand-text">DevSecOps Masterclass</span>
+      </a>
+      <nav class="topnav" aria-label="Sections">
+        <a href="#pillars">Pillars</a>
+        <a href="#pipeline">Pipeline</a>
+        <a href="#stack">Stack</a>
+      </nav>
+    </header>
+
+    <main id="top">
+      <section class="hero">
+        <p class="eyebrow" data-reveal>Continuous Delivery, End to End</p>
+        <h1 class="hero-title" data-reveal>Learn DevOps the Easy Way</h1>
+        <ul class="hero-subtitle" data-reveal>
+          <li>Infrastructure as Code</li>
+          <li>Containers</li>
+          <li>CI/CD</li>
+          <li>Automation</li>
+        </ul>
+        <div class="hero-actions" data-reveal>
+          <a class="btn btn-primary" href="#pipeline">See the Pipeline</a>
+          <a class="btn btn-ghost" href="#pillars">Explore the Pillars</a>
+        </div>
+
+        <dl class="stats" id="stats" data-reveal>
+          <div class="stat">
+            <dt>Pipeline Stages</dt>
+            <dd><span class="counter" data-count-to="20">0</span></dd>
+          </div>
+          <div class="stat">
+            <dt>Security Gates</dt>
+            <dd><span class="counter" data-count-to="3">0</span></dd>
+          </div>
+          <div class="stat">
+            <dt>Manual Steps</dt>
+            <dd><span class="counter" data-count-to="0">0</span></dd>
+          </div>
+        </dl>
+      </section>
+
+      <section class="pillars" id="pillars" aria-labelledby="pillars-heading">
+        <h2 id="pillars-heading" data-reveal>Four Pillars, One Workflow</h2>
+        <div class="card-grid" id="pillar-grid" data-reveal></div>
+      </section>
+
+      <section class="pipeline" id="pipeline" aria-labelledby="pipeline-heading">
+        <h2 id="pipeline-heading" data-reveal>Every Commit Walks the Same Path</h2>
+        <p class="section-lead" data-reveal>
+          Validation, quality, security, build, infrastructure and verification —
+          each stage is a gate that a release has to earn.
+        </p>
+        <ol class="pipeline-track" id="pipeline-track" data-reveal></ol>
+      </section>
+
+      <section class="stack" id="stack" aria-labelledby="stack-heading">
+        <h2 id="stack-heading" data-reveal>Built On</h2>
+        <ul class="stack-list" data-reveal>
+          <li>AWS</li>
+          <li>Terraform</li>
+          <li>Docker</li>
+          <li>Nginx</li>
+          <li>GitHub Actions</li>
+          <li>Ansible</li>
+        </ul>
+      </section>
+    </main>
+
+    <footer class="footer">
+      <p>DevSecOps Masterclass — Infrastructure as Code, Containers, CI/CD, Automation.</p>
+    </footer>
+
+    <script src="js/app.js"></script>
+  </body>
+</html>

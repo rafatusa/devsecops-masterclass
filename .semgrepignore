@@ -1,0 +1,28 @@
+# Semgrep scope — Stage 7: Static Security Scan
+#
+# Everything the project actually authors is scanned: src/, scripts/, infra/,
+# nginx/, ansible/, tests/ and the Dockerfile.
+#
+# Excluded below are the CI workflow files. They are RENDERED by the UDAP
+# platform from .udap/pipeline.yaml, which injects `actions/checkout@v4`
+# itself, so the mutable-action-tag rule cannot be satisfied from this
+# repository: the checkout ref is not ours to pin, and pinning the remaining
+# actions to unverified 40-character SHAs would be worse practice than the
+# major-version pins used here (see the Optional Enhancements note in the
+# README about full SHA pinning).
+#
+# This narrows one supply-chain rule for files we do not control. No code,
+# infrastructure, container or configuration rule is disabled.
+
+.github/workflows/
+.udap/pipeline.yaml
+
+# Third-party dependency trees and generated artifacts — never first-party
+# source. Findings inside vendored libraries belong to dependency scanning
+# (Trivy / npm audit), not to a static analysis of this project's own code.
+node_modules/
+.venv/
+venv/
+coverage/
+package-lock.json
+image.tar

@@ -1,0 +1,231 @@
+---
+# DevSecOps Masterclass — Stages 15-17
+#   15. Install Docker
+#   16. Deploy Container (from the image tarball built in CI)
+#   17. Configure Nginx (host reverse proxy on :80 -> container :8080)
+#
+# ansible-core ships no third-party collections, so every task below uses
+# ansible.builtin only (community.docker.docker_container would fail to resolve
+# at parse time). Container operations go through the docker CLI with explicit
+# changed_when / creates guards so reruns stay predictable.
+
+- name: Configure the masterclass Docker host
+  hosts: web
+  become: true
+  gather_facts: true
+
+  vars:
+    image_name: devsecops-masterclass
+    image_tag: ci
+    container_name: devsecops-site
+    container_port: 8080
+    app_dir: /opt/devsecops
+    remote_tarball: /opt/devsecops/image.tar
+    # image_tarball MUST be an absolute path: ansible.builtin.copy resolves a
+    # relative src against the playbook's directory, not the working directory.
+    # The configure stage passes -e image_tarball=$GITHUB_WORKSPACE/image.tar.
+    image_tarball: ""
+
+  tasks:
+    - name: Fail early when the image tarball path was not supplied absolutely
+      ansible.builtin.assert:
+        that:
+          - image_tarball | length > 0
+          - image_tarball is match('^/')
+        fail_msg: >-
+          image_tarball must be passed as an ABSOLUTE path
+          (-e image_tarball=/abs/path/image.tar); a relative path would be
+          resolved against the ansible/ directory by ansible.builtin.copy.
+
+    - name: Wait for SSH to be fully available
+      ansible.builtin.wait_for_connection:
+        timeout: 300
+        delay: 0
+
+    # ---------------- Stage 15: Install Docker ----------------
+    # No cache_valid_time: cloud images ship a prebuilt apt index that looks
+    # fresh while naming superseded versions, which turns into 404s on install.
+
+    - name: Refresh the apt cache
+      ansible.builtin.apt:
+        update_cache: true
+      register: apt_refresh
+      retries: 5
+      delay: 15
+      until: apt_refresh is succeeded
+
+    - name: Install Docker prerequisites and host nginx
+      ansible.builtin.apt:
+        name:
+          - ca-certificates
+          - curl
+          - gnupg
+          - nginx
+        state: present
+      register: apt_prereqs
+      retries: 5
+      delay: 15
+      until: apt_prereqs is succeeded
+
+    - name: Create the apt keyring directory
+      ansible.builtin.file:
+        path: /etc/apt/keyrings
+        state: directory
+        mode: "0755"
+
+    - name: Download the Docker apt signing key
+      ansible.builtin.get_url:
+        url: https://download.docker.com/linux/ubuntu/gpg
+        dest: /etc/apt/keyrings/docker.asc
+        mode: "0644"
+        force: false
+      register: docker_key
+      retries: 5
+      delay: 10
+      until: docker_key is succeeded
+
+    - name: Add the Docker apt repository
+      ansible.builtin.apt_repository:
+        repo: >-
+          deb [arch=amd64 signed-by=/etc/apt/keyrings/docker.asc]
+          https://download.docker.com/linux/ubuntu
+          {{ ansible_facts.distribution_release }} stable
+        filename: docker
+        state: present
+        update_cache: true
+      register: docker_repo
+      retries: 5
+      delay: 15
+      until: docker_repo is succeeded
+
+    - name: Install Docker Engine
+      ansible.builtin.apt:
+        name:
+          - docker-ce
+          - docker-ce-cli
+          - containerd.io
+        state: present
+      register: docker_install
+      retries: 5
+      delay: 15
+      until: docker_install is succeeded
+
+    - name: Ensure Docker is running and enabled at boot
+      ansible.builtin.service:
+        name: docker
+        state: started
+        enabled: true
+
+    # ---------------- Stage 16: Deploy Container ----------------
+
+    - name: Create the application directory
+      ansible.builtin.file:
+        path: "{{ app_dir }}"
+        state: directory
+        mode: "0755"
+
+    - name: Copy the CI-built image tarball to the host
+      ansible.builtin.copy:
+        src: "{{ image_tarball }}"
+        dest: "{{ remote_tarball }}"
+        mode: "0600"
+
+    - name: Load the image into the local Docker daemon
+      ansible.builtin.command:
+        cmd: "docker load --input {{ remote_tarball }}"
+      register: docker_load
+      changed_when: "'Loaded image' in docker_load.stdout"
+
+    - name: Check whether the site container already exists
+      ansible.builtin.command:
+        cmd: "docker inspect --format={{ '{{.Id}}' }} {{ container_name }}"
+      register: container_probe
+      failed_when: false
+      changed_when: false
+
+    - name: Remove the previous container revision
+      ansible.builtin.command:
+        cmd: "docker rm --force {{ container_name }}"
+      when: container_probe.rc == 0
+      changed_when: true
+
+    - name: Run the site container bound to localhost
+      ansible.builtin.command:
+        cmd: >-
+          docker run --detach
+          --name {{ container_name }}
+          --restart unless-stopped
+          --publish 127.0.0.1:{{ container_port }}:8080
+          --read-only
+          --tmpfs /tmp
+          --tmpfs /var/cache/nginx
+          --tmpfs /var/log/nginx
+          {{ image_name }}:{{ image_tag }}
+      register: docker_run
+      changed_when: docker_run.rc == 0
+
+    - name: Wait for the container to answer on its port
+      ansible.builtin.wait_for:
+        host: 127.0.0.1
+        port: "{{ container_port }}"
+        timeout: 120
+
+    - name: Verify the container health endpoint
+      ansible.builtin.uri:
+        url: "http://127.0.0.1:{{ container_port }}/healthz"
+        status_code: 200
+      register: container_health
+      retries: 10
+      delay: 6
+      until: container_health is succeeded
+
+    # ---------------- Stage 17: Configure Nginx ----------------
+
+    - name: Remove the default nginx site
+      ansible.builtin.file:
+        path: /etc/nginx/sites-enabled/default
+        state: absent
+      notify: Reload nginx
+
+    - name: Install the reverse-proxy vhost
+      ansible.builtin.template:
+        src: templates/site.conf.j2
+        dest: /etc/nginx/sites-available/devsecops.conf
+        mode: "0644"
+      notify: Reload nginx
+
+    - name: Enable the reverse-proxy vhost
+      ansible.builtin.file:
+        src: /etc/nginx/sites-available/devsecops.conf
+        dest: /etc/nginx/sites-enabled/devsecops.conf
+        state: link
+      notify: Reload nginx
+
+    - name: Validate the nginx configuration
+      ansible.builtin.command:
+        cmd: nginx -t
+      changed_when: false
+
+    - name: Ensure nginx is running and enabled at boot
+      ansible.builtin.service:
+        name: nginx
+        state: started
+        enabled: true
+
+    - name: Apply pending nginx reloads before verifying
+      ansible.builtin.meta: flush_handlers
+
+    - name: Confirm the site is served on port 80
+      ansible.builtin.uri:
+        url: http://127.0.0.1/healthz
+        status_code: 200
+      register: proxy_health
+      retries: 10
+      delay: 6
+      until: proxy_health is succeeded
+
+  handlers:
+    - name: Reload nginx
+      ansible.builtin.service:
+        name: nginx
+        state: reloaded
